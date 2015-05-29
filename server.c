@@ -17,6 +17,7 @@
 
 #define PORT "30001"
 #define BACKLOG 10
+#define MAXDATASIZE 100
 
 typedef struct client
 {
@@ -46,10 +47,12 @@ typedef struct client
     struct sockaddr_storage their_addr; 
     socklen_t sin_size;
 
-    char buf[256];
+    char buf[MAXDATASIZE];
+    char msg[MAXDATASIZE];
+    char xor[MAXDATASIZE];
     int numbytes;
     LIST* clientList;
-    //LIST* msgs;
+    LIST* msgList;
 
     //need if using fork()
     //struct sigaction sa;  
@@ -57,10 +60,11 @@ typedef struct client
     char remoteIP[INET6_ADDRSTRLEN];
     int i, j, rv;
 
-    int clients = 0;
+    int numClients = 0;
     int msgCount = 0;
 
     clientList = ListCreate();
+    msgList = ListCreate();
 
     //clear file descriptor sets
     FD_ZERO(&master);
@@ -149,11 +153,10 @@ typedef struct client
             {
                 if (i == listener)
                 {
-                    // Handle new connection
+                    /* New connection */
                     sin_size = sizeof their_addr;
-                    new_fd = accept(listener, 
-                        (struct sockaddr *)&their_addr, &sin_size);
 
+                    new_fd = accept(listener, (struct sockaddr *)&their_addr, &sin_size);
                     if (new_fd == -1)
                     {
                         perror("accept");
@@ -167,24 +170,31 @@ typedef struct client
                             fdmax = new_fd;
                         }
 
-                        ListLast(clientList);
+                        ListLast(clientList);   //TODO: Find the right place to add client
                         ListAdd(clientList, malloc(sizeof(CLIENT)));
-                        ((CLIENT *)clientList->cur->item).fd = i;
-                        strcpy(((CLIENT *)clientList->cur->item).hostname, inet_ntop(their_addr.ss_family, 
+                        ((CLIENT *)clientList->cur->item)->fd = new_fd;
+                        strcpy(((CLIENT *)clientList->cur->item)->hostname, inet_ntop(their_addr.ss_family, 
                             get_in_addr((struct sockaddr*)&their_addr), remoteIP, INET6_ADDRSTRLEN));
-                        clients++;
-/*
-                        if (clients < 3)
+                        numClients++;
+
+                        printf("%d: %d: %s\n", numClients, ((CLIENT *)clientList->cur->item)->fd, ((CLIENT *)clientList->cur->item)->hostname);
+
+                        if (numClients < 3)
                         {
-                            //Not enough clients
-                            if (send(i, "0", 1, 0) == -1)
+                            /* Not enough clients 
+                               Tell them to wait. */
+                            if (send(new_fd, "0:", 2, 0) == -1)
                             {
                                 perror("send");
                             }
                         }
-                        else if (clients == 3)
+                        else if (numClients == 3)
                         {
-                            //Send 'start' to all clients
+                            /* Third client arrived.
+                               Tell everyone to start. */
+
+                            ListFirst(clientList);
+
                             for (j = 0; j <= fdmax; j++)
                             {
                                 if (FD_ISSET(j, &master))
@@ -192,7 +202,14 @@ typedef struct client
                                     // Don't send to listener
                                     if (j != listener)
                                     {
-                                        if (send(j, "1", 1, 0) == -1)
+                                        if(ListLast(clientList))
+                                            ListFirst(clientList);
+                                        else
+                                            ListNext(clientList);
+
+                                        strcpy(msg, "1:");
+                                        strcat(msg, ((CLIENT *)clientList->cur->item)->hostname);
+                                        if (send(j, msg, strlen(msg), 0) == -1)
                                         {
                                             perror("send");
                                         }
@@ -202,15 +219,18 @@ typedef struct client
                         }
                         else
                         {
+                            /* Chat started, someone else joined.
+                               Do something.  */
                             //Tell newest client to start, and update graph
                             if (send(i, "1", 1, 0) == -1)
                             {
                                 perror("send");
                             }
 
+                            //TODO: Lots of stuff.
 
                         }
-*/
+
                         printf("server: new connection from %s on socket %d\n",
                             inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr*)&their_addr),
                                 remoteIP, INET6_ADDRSTRLEN),
@@ -226,7 +246,7 @@ typedef struct client
                         if (numbytes == 0)
                         {
                             // Connection closed
-                            clients--;
+                            numClients--;
                             printf("server: socket %d hung up.\n", i);
                         }
                         else
@@ -239,22 +259,41 @@ typedef struct client
                     else
                     {
                         // Data from client
-                        //buf[numbytes] = '\0';
                         msgCount++;
-                        printf("Message received (%i/%i)\n", msgCount, clients);
+                        buf[numbytes] = '\0';
+                        if(ListAdd(msgList, malloc(MAXDATASIZE)) == -1)
+                            perror("ListAdd");
+                        strcpy((char *)(msgList->cur->item), buf);
+                        printf("Message received (%i/%i)\n", msgCount, numClients);
+                        printf("    - %s\n", buf);
 
-                        if(msgCount >= clients)
+                        if(msgCount >= numClients)
                         {
-                            //printf("Sending %s\n", buf);
+                            //xor messages
+                            strcpy(xor, ListFirst(msgList));
+                            free(ListRemove(msgList));
+
+                            while(ListCount(msgList) > 0)
+                            {
+                                strcpy(buf, (char *)msgList->cur->item);
+                                for(j = 0; j <= MAXDATASIZE; j++)
+                                {
+                                    xor[j] ^= buf[j];
+                                }
+                                free(ListRemove(msgList));
+                            }
+                            strcpy(msg, "2:");
+                            strcat(msg, xor);
+
+                            /* Send message. */
                             for (j = 0; j <= fdmax; j++)
                             {
-                                // Send
                                 if (FD_ISSET(j, &master))
                                 {
                                     // Don't send to listener
                                     if (j != listener)
                                     {
-                                        if (send(j, buf, numbytes, 0) == -1)
+                                        if (send(j, msg, strlen(msg), 0) == -1)
                                         {
                                             perror("send");
                                         }
@@ -268,6 +307,5 @@ typedef struct client
             }
         }
     }
-
     return 0;
 }
