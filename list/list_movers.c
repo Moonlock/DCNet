@@ -80,7 +80,6 @@ void* ListNext(LIST* list)
 	}	
 	if(list->cur->next == NULL)
 	{
-		printf("ERROR: At the end of the list.\n");
 		return NULL;
 	}
 	list->cur = list->cur->next;
@@ -103,7 +102,6 @@ void* ListPrev(LIST* list)
 	}	
 	if(list->cur->prev == NULL)
 	{
-		printf("ERROR: At the beginning of the list.\n");
 		return NULL;
 	}
 	list->cur = list->cur->prev;
