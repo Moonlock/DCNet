@@ -17,12 +17,13 @@
 
 #define PORT "30001"
 #define BACKLOG 10
-#define MAXDATASIZE 100
+#define MAXDATASIZE 500
 
 typedef struct client
 {
     int fd;
     char hostname[INET6_ADDRSTRLEN];
+    char lport[6];
 } CLIENT;
 
  void *get_in_addr(struct sockaddr *sa)
@@ -51,8 +52,10 @@ typedef struct client
     char msg[MAXDATASIZE];
     char xor[MAXDATASIZE];
     int numbytes;
-    LIST* clientList;
     LIST* msgList;
+    LIST* clientList;
+    char* port = "30002";
+    char temp[6];
 
     //need if using fork()
     //struct sigaction sa;  
@@ -109,7 +112,8 @@ typedef struct client
     	break;
     }
 
-    if (p == NULL) {
+    if (p == NULL) 
+    {
     	fprintf(stderr, "server: failed to bind socket\n");
     	return 2;
     }
@@ -175,6 +179,10 @@ typedef struct client
                         ((CLIENT *)clientList->cur->item)->fd = new_fd;
                         strcpy(((CLIENT *)clientList->cur->item)->hostname, inet_ntop(their_addr.ss_family, 
                             get_in_addr((struct sockaddr*)&their_addr), remoteIP, INET6_ADDRSTRLEN));
+                        strcpy(((CLIENT *)clientList->cur->item)->lport, port);
+                        //port = itoa(atoi(port) + 1);
+                        sprintf(temp, "%d", atoi(port) + 1);
+                        port = temp;
                         numClients++;
 
                         printf("%d: %d: %s\n", numClients, ((CLIENT *)clientList->cur->item)->fd, ((CLIENT *)clientList->cur->item)->hostname);
@@ -202,13 +210,32 @@ typedef struct client
                                     // Don't send to listener
                                     if (j != listener)
                                     {
-                                        if(ListLast(clientList))
-                                            ListFirst(clientList);
-                                        else
-                                            ListNext(clientList);
+                                        //if(ListLast(clientList))
+                                        //    ListFirst(clientList);
+                                        //else
+                                        //    ListNext(clientList);
 
+                                        /* 1:[sender port]:[hostname]:[receiver port] */
                                         strcpy(msg, "1:");
+                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        strcat(msg, ((CLIENT *)clientList->cur->item)->lport);
+                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        strcat(msg, ":");
+                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+
+                                        if(ListNext(clientList) == NULL)
+                                            ListFirst(clientList);
+
                                         strcat(msg, ((CLIENT *)clientList->cur->item)->hostname);
+                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf("...%s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        strcat(msg, ":");
+                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf("..\n");
+                                        strcat(msg, ((CLIENT *)clientList->cur->item)->lport);  
+
+                                        //printf(".\n");
+                                        printf(" - %s - (%lu)\n", msg, strlen(msg));
                                         if (send(j, msg, strlen(msg), 0) == -1)
                                         {
                                             perror("send");
