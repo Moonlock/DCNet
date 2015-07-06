@@ -14,6 +14,11 @@
 #include <netdb.h>
 #include "list/list.h"
 
+#include <openssl/dh.h>
+#include <openssl/bn.h>
+#include <openssl/rand.h>
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 
 #define PORT "30001"
 #define BACKLOG 10
@@ -65,13 +70,27 @@ typedef struct client
 
     int numClients = 0;
     int msgCount = 0;
+    
 
     clientList = ListCreate();
     msgList = ListCreate();
 
+    DH *dh;
+    int prime_len;
+    int generator = 2;
+
     //clear file descriptor sets
     FD_ZERO(&master);
     FD_ZERO(&read_fds);
+
+    if (argc == 2)
+        prime_len = atoi(argv[1]);
+    else
+        prime_len = 1024;
+
+    dh = DH_new();
+    DH_generate_parameters_ex(dh, prime_len, generator, NULL);
+    printf("  p = %s\n", BN_bn2hex(dh->p));
 
  	memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET; 
@@ -187,11 +206,21 @@ typedef struct client
 
                         printf("%d: %d: %s\n", numClients, ((CLIENT *)clientList->cur->item)->fd, ((CLIENT *)clientList->cur->item)->hostname);
 
+                        //strcpy(msg, BN_bn2hex(dh->p));
+                        //strcat(msg, ":");
+                        //if (send(new_fd, msg, strlen(msg), 0) == -1)
+                        //{
+                        //    perror("send");
+                        //}
+
                         if (numClients < 3)
                         {
                             /* Not enough clients 
                                Tell them to wait. */
-                            if (send(new_fd, "0:", 2, 0) == -1)
+                            strcpy(msg, BN_bn2hex(dh->p));
+                            strcat(msg, ":");
+                            strcat(msg, "0:");
+                            if (send(new_fd, msg, strlen(msg), 0) == -1)
                             {
                                 perror("send");
                             }
@@ -216,26 +245,36 @@ typedef struct client
                                         //    ListNext(clientList);
 
                                         /* 1:[sender port]:[hostname]:[receiver port] */
-                                        strcpy(msg, "1:");
-                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //strcpy(msg, "");
+                                        if(j == new_fd)     //Send prime
+                                        {
+                                            strcpy(msg, BN_bn2hex(dh->p));
+                                            strcat(msg, ":");
+                                            strcat(msg, "1:");
+                                        }
+                                        else
+                                        {
+                                            strcpy(msg, "1:");
+                                        }
+                                        //printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
                                         strcat(msg, ((CLIENT *)clientList->cur->item)->lport);
-                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
                                         strcat(msg, ":");
-                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
 
                                         if(ListNext(clientList) == NULL)
                                             ListFirst(clientList);
 
                                         strcat(msg, ((CLIENT *)clientList->cur->item)->hostname);
-                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
                                         //printf("...%s\n", ((CLIENT *)clientList->cur->item)->lport);
                                         strcat(msg, ":");
-                                        printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
+                                        //printf(" _ %s\n", ((CLIENT *)clientList->cur->item)->lport);
                                         //printf("..\n");
                                         strcat(msg, ((CLIENT *)clientList->cur->item)->lport);  
 
                                         //printf(".\n");
-                                        printf(" - %s - (%lu)\n", msg, strlen(msg));
+                                        //printf(" - %s - (%lu)\n", msg, strlen(msg));
                                         if (send(j, msg, strlen(msg), 0) == -1)
                                         {
                                             perror("send");
