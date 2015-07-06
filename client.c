@@ -4,21 +4,23 @@
 #include <errno.h>
 #include <string.h>
 #include <netdb.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 
-#include <gcrypt.h>
 #include <openssl/dh.h>
 #include <openssl/bn.h>
 #include <openssl/rand.h>
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 #define PORT "30001" // the port client will be connecting to 
-#define CPORT "30002"
 #define BACKLOG 10
 #define MAXDATASIZE 500 // max number of bytes we can get at once 
+
+DH *dh;		//Diffie-Hellman key
 
 typedef struct client
 {
@@ -47,9 +49,9 @@ void *StartDH(void* client)
 	struct addrinfo hints, *servinfo, *p;
 	char remoteIP[INET6_ADDRSTRLEN];
 
-	DH *dh;
-	int prime_len = 1024;
-	int generator = 2;
+	//DH *dh;
+	//int prime_len = 1024;
+	//int generator = 2;
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
@@ -94,10 +96,10 @@ void *StartDH(void* client)
 	freeaddrinfo(servinfo);
 
 	// Diffie-Hellman
-	dh = DH_new();
-	DH_generate_parameters_ex(dh, prime_len, generator, NULL);
+	//dh = DH_new();
+	//DH_generate_parameters_ex(dh, prime_len, generator, NULL);
 
-	DH_free(dh);
+	//DH_free(dh);
 
 	if ((numbytes = send(client_fd, "msg", 3, 0)) == -1)
 	{
@@ -219,12 +221,18 @@ int main(int argc, char* argv[])
 	char *sport, *rport;
 	int command, ready;
 
+    struct timeval tv;
+    fd_set readfds;
+
+
 	if (argc != 2)
 	{
 		fprintf(stderr, "usage: ./client hostname");
 		exit(1);
 	}
 	serv_hostname = argv[1];
+
+	dh = DH_new();
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_family = AF_INET;
@@ -266,20 +274,38 @@ int main(int argc, char* argv[])
 
 	freeaddrinfo(servinfo);
 
+	// Receive Diffie-Hellman prime
+	if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
+	{
+		perror("recv");
+		exit(1);
+	}
+	buf[numbytes] = '\0';
+
+	printf("   %s\n", buf);
+	strcpy(msg, strtok(buf, ":"));
+	BN_hex2bn(&dh->p, msg);
+	strcpy(buf, strtok(NULL, "\0"));
+	//printf("  p = %s\n", BN_bn2hex(dh->p));
+// int BN_dec2bn(BIGNUM **a, const char *str);
+	
+
 
 	while(1)
 	{
 		// Receive - 0:(wait)
 		//			 1:[sender port]:[hostname]:[receiver port]
 		//			 2:[message]
-		if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
+	/*	if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
 		{
 			perror("recv");
 			exit(1);
 		}
 		buf[numbytes] = '\0';
-
+	*/
+		printf("%s\n", buf);
 		command = atoi(strtok(buf, ":"));
+		printf("%i\n", command);
 
 		switch (command)
 		{
@@ -311,16 +337,50 @@ int main(int argc, char* argv[])
 		//Receive
 		//Select (replace scanf)
 		//XOR
+			strcpy(msg, " ");
+			//printf("%s\n", msg);
 			printf(">>");
-			scanf("%s", msg);
+			fflush(stdout);
+			//scanf("%s", msg);
+			tv.tv_sec = 5;
+			tv.tv_usec = 0;
+
+			FD_ZERO(&readfds);
+			FD_SET(0, &readfds);
+
+			if (select(1, &readfds, NULL, NULL, &tv) == -1)
+			{
+            	perror("select");
+            	exit(4);
+        	}
+
+			//read
+			//fgets(msg, sizeof(msg), stdin);
+
+			if (FD_ISSET(0, &readfds))
+			{
+				fgets(msg, sizeof(msg), stdin);
+				printf("  sent \"%s\"\n", msg);
+			}
+			else
+			{
+				printf("  timeout \"%s\" (%lu)\n", msg, strlen(msg));
+			}
 		//printf("Sending %s\n", msg);
 
-			if ((numbytes = send(server_fd, msg, strlen(msg), 0)) == -1)
+			if (send(server_fd, msg, strlen(msg), 0) == -1)
 			{
 				perror("send");
 				exit(1);
 			}
 		}
+
+		if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
+		{
+			perror("recv");
+			exit(1);
+		}
+		buf[numbytes] = '\0';
 	}
 	return 0;
 }
