@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <semaphore.h>
 
 #include <openssl/dh.h>
 #include <openssl/bn.h>
@@ -48,6 +49,10 @@ void *StartDH(void* client)
 	int numbytes;
 	struct addrinfo hints, *servinfo, *p;
 	char remoteIP[INET6_ADDRSTRLEN];
+	char buf[MAXDATASIZE];
+
+    BIGNUM *pubKey = NULL;
+    unsigned char *key = NULL;
 
 	//DH *dh;
 	//int prime_len = 1024;
@@ -101,11 +106,37 @@ void *StartDH(void* client)
 
 	//DH_free(dh);
 
-	if ((numbytes = send(client_fd, "msg", 3, 0)) == -1)
+/*	if (DH_generate_key(dh) == 0)
+	{
+		perror("DH_generate_key");
+		exit(1);
+	}
+*/	printf("  ->%s\n", BN_bn2hex(dh->pub_key));
+
+	if ((numbytes = send(client_fd, BN_bn2hex(dh->pub_key), strlen(BN_bn2hex(dh->pub_key)), 0)) == -1)
 	{
 		perror("send");
 		exit(1);
 	}
+
+	if ((numbytes = recv(client_fd, buf, MAXDATASIZE-1, 0)) == -1) 
+    {
+        perror("recv(client)");
+        exit(1);
+    }
+
+    buf[numbytes] = '\0';
+    BN_hex2bn(&pubKey, buf);
+    //printf(" dh: %s\n", buf);
+    printf(" dh(send): %s\n", BN_bn2hex(pubKey));
+
+    key = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(dh)));
+    if(DH_compute_key(key, pubKey, dh) == -1)
+    {
+    	perror("DH_compute_key");
+    	exit(1);
+    }
+    //printf(" key(start): %s\n", key);
 
 	return NULL;//client_fd;
 }
@@ -127,10 +158,19 @@ int ConnectToClient(char* sport, char *hostname, char* rport)
 	struct sockaddr_storage their_addr;
     socklen_t sin_size;
 
+    BIGNUM *pubKey = NULL;
+    unsigned char *key = NULL;
+
  	memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET; 
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE;
+
+   	if (DH_generate_key(dh) == 0)
+	{
+		perror("DH_generate_key");
+		exit(1);
+	}
 
     printf("	%s, %s, %s", sport, hostname, rport);
 
@@ -198,11 +238,32 @@ int ConnectToClient(char* sport, char *hostname, char* rport)
         perror("recv(client)");
         return 1;
     }
+
+	printf("  -->%s\n", BN_bn2hex(dh->pub_key));
+
+    if (send(new_fd, BN_bn2hex(dh->pub_key), strlen(BN_bn2hex(dh->pub_key)), 0) == -1)
+	{
+		perror("send");
+		exit(1);
+	}
+
+    rv = pthread_join(startThread, &status);
+
     buf[numbytes] = '\0';
-    printf(" dh: %s\n", buf);
+    BN_hex2bn(&pubKey, buf);
+    //printf(" dh: %s\n", buf);
+    printf(" dh(return): %s\n", BN_bn2hex(pubKey));
+
+    key = OPENSSL_malloc(sizeof(unsigned char) * (DH_size(dh)));
+    if(DH_compute_key(key, pubKey, dh) == -1)
+    {
+    	perror("DH_compute_key");
+    	exit(1);
+    }
+    //printf(" key(connect): %s\n", key);
 
     close(listener);
-    rv = pthread_join(startThread, &status);
+    //rv = pthread_join(startThread, &status);
 
 	return 0;
 }
@@ -285,6 +346,7 @@ int main(int argc, char* argv[])
 	printf("   %s\n", buf);
 	strcpy(msg, strtok(buf, ":"));
 	BN_hex2bn(&dh->p, msg);
+	BN_dec2bn(&dh->g, "2");
 	strcpy(buf, strtok(NULL, "\0"));
 	//printf("  p = %s\n", BN_bn2hex(dh->p));
 // int BN_dec2bn(BIGNUM **a, const char *str);
