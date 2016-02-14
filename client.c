@@ -19,8 +19,7 @@
 
 #define PORT "30001" /* The port the server is listening on. */
 #define BACKLOG 10
-#define MAXDATASIZE 500 /* Max number of bytes client can receive at once. */
-#define MAXMESSAGESIZE 160
+#define MAXMESSAGELENGTH 257 /* Messages are 256 bytes, plus nul byte. */
 
 
 DH* dh;								/* Diffie-Hellman key. */
@@ -52,7 +51,7 @@ void* StartDH(void* client)
 	int fd;
 	struct addrinfo hints, *servinfo, *p;
 	char remoteIP[INET6_ADDRSTRLEN];
-	char buf[MAXDATASIZE];
+	char buf[MAXMESSAGELENGTH];
 	int rv, numbytes;
 
 
@@ -101,7 +100,7 @@ void* StartDH(void* client)
 		exit(-1);
 	}
 
-	if ((numbytes = recv(fd, buf, MAXDATASIZE-1, 0)) == -1)
+	if ((numbytes = recv(fd, buf, MAXMESSAGELENGTH-1, 0)) == -1)
 	{
 		perror("client: recv");
 		exit(-1);
@@ -139,7 +138,7 @@ int ConnectToClient(char* local_port, char* hostname, char* remote_port)
 	int yes = 1;
 
 	int rv, numbytes;
-	char buf[MAXDATASIZE];
+	char buf[MAXMESSAGELENGTH];
 
 
 	memset(&hints, 0, sizeof hints);
@@ -214,7 +213,7 @@ int ConnectToClient(char* local_port, char* hostname, char* remote_port)
     	exit(-1);
     }
 
-    if ((numbytes = recv(fd, buf, MAXDATASIZE-1, 0)) == -1)
+    if ((numbytes = recv(fd, buf, MAXMESSAGELENGTH-1, 0)) == -1)
     {
     	perror("client: recv");
     	exit(-1);
@@ -258,18 +257,20 @@ int main(int argc, char const *argv[])
 	int server_fd, client_fd;
 	struct addrinfo hints, *servinfo, *p;
 	char remoteIP[INET6_ADDRSTRLEN];
-	char *serv_hostname, *client_hostname;
+	const char *serv_hostname;
+	char *client_hostname;
 	char *local_port, *remote_port;
 	int rv, numbytes;
-	int i, j, command, ready;
+	int i, command, msgExists, ready;
 
-	char buf[MAXDATASIZE];
-	char msgRecv[MAXDATASIZE], msgSend[MAXDATASIZE];
+	char buf[400];	/* Space for DH prime as well as connection information. */
+
+	char msgRecv[MAXMESSAGELENGTH], msgSend[MAXMESSAGELENGTH];
 
 	struct timeval tv;
 	fd_set readfs;
 
-	char dataR[MAXDATASIZE], dataL[MAXDATASIZE];
+	char dataR[MAXMESSAGELENGTH], dataL[MAXMESSAGELENGTH];
 	char xorKeyR[257], xorKeyL[257];
 	unsigned char *hashR = malloc(sizeof(unsigned char) * 65);	/* 512bit hash, plus null byte. */
 	unsigned char *hashL = malloc(sizeof(unsigned char) * 65);
@@ -333,7 +334,7 @@ int main(int argc, char const *argv[])
 	freeaddrinfo(servinfo);
 
 	/* Receive Diffie-Hellman prime. */
-	if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
+	if ((numbytes = recv(server_fd, buf, sizeof(buf), 0)) == -1)
 	{
 		perror("recv");
 		exit(-1);
@@ -349,8 +350,8 @@ int main(int argc, char const *argv[])
 	{
 		/* Receive - 0:(wait)
 					 1:[local port]:[hostname]:[remote port]
-					 2:[message]
-					 3:[message]
+					 2:[message flag]:[message]
+					 3:[message flag]:[message]
 		*/
 
 		switch (command)
@@ -371,10 +372,12 @@ int main(int argc, char const *argv[])
 			break;
 		case 2:	/* Receive message. */
 			ready = 1;
-			strcpy(msgRecv, strtok(NULL, "\0"));	// Segfault due to copying NULL.
+			msgExists = atoi(strtok(NULL, ":"));
 
-			if (msgRecv != NULL)
+			if (msgExists == 1)
 			{
+				strcpy(msgRecv, strtok(NULL, "\0"));
+
 				printf("RECEIVED: '%s'\n", msgRecv);
 				printf(">>");
 				fflush(stdout);
@@ -382,10 +385,12 @@ int main(int argc, char const *argv[])
 			break;
 		case 3: /* Receive message, then wait for new connections info. */
 			ready = 0;
-			strcpy(msgRecv, strtok(NULL, "\0"));
+			msgExists = atoi(strtok(NULL, ":"));
 
-			if (msgRecv != NULL)
+			if (msgExists == 1)
 			{
+				strcpy(msgRecv, strtok(NULL, "\0"));
+
 				printf("RECEIVED: '%s'\n", msgRecv);
 				printf(">>");
 				fflush(stdout);
@@ -400,8 +405,8 @@ int main(int argc, char const *argv[])
 		{
 			strcpy(msgSend, "");
 
-			tv.tv_sec = 5;
-			tv.tv_usec = 0;
+			tv.tv_sec = 0;
+			tv.tv_usec = 500000;
 
 			FD_ZERO(&readfs);
 			FD_SET(0, &readfs);
@@ -416,6 +421,7 @@ int main(int argc, char const *argv[])
 			if (FD_ISSET(0, &readfs))
 			{
 				fgets(msgSend, sizeof(msgSend), stdin);
+				msgSend[strlen(msgSend) - 1] = 0;	/* Get rid of newline. */
 				printf("[DEBUG] Sent '%s'\n", msgSend);
 			}
 
@@ -441,20 +447,20 @@ int main(int argc, char const *argv[])
 			{
 				msgSend[i] ^= (xorKeyR[i] ^ xorKeyL[i]);
 			}
-			for (; i < strlen(xorKeyR); i++)
+			for (; i < MAXMESSAGELENGTH; i++)
 			{
 				msgSend[i] = xorKeyR[i] ^ xorKeyL[i];
 			}
 
 			/* Send xor'd message to server. */
-			if (send(server_fd, msgSend, strlen(msgSend), 0) == -1)
+			if (send(server_fd, msgSend, MAXMESSAGELENGTH-1, 0) == -1)
 			{
 				perror("send");
 				exit(-1);
 			}
 		}
 
-		if ((numbytes = recv(server_fd, buf, MAXDATASIZE-1, 0)) == -1)
+		if ((numbytes = recv(server_fd, buf, MAXMESSAGELENGTH-1, 0)) == -1)
 		{
 			perror("recv");
 			exit(-1);

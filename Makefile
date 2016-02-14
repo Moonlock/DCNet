@@ -1,26 +1,23 @@
-# Angela Stankowski
-# ans723
-# 11119985
-#
-
 CC = gcc
 CFLAGS = -g -Wall -pedantic
 
-all: client server
+all: client server list
 
 
 client: client.o
-	$(CC) $(CFLAGS) client.o -o client
+	$(CC) $(CFLAGS) client.o -L/usr/local/ssl/lib -lcrypto -o client
 
-client.o: client.c
-	$(CC) $(CFLAGS) -c client.c
+client2.o: client.c
+	$(CC) $(CFLAGS) -I/usr/local/ssl/include/ -c client.c
 
-server: server.o
-	$(CC) $(CFLAGS) server.o -L./list -llist -o server
+server: server.o list
+	$(CC) $(CFLAGS) server.o -L/usr/local/ssl/lib -lcrypto -L./list -llist -o server
 
 server.o: server.c
+	$(CC) $(CFLAGS) -I/usr/local/ssl/include/ -I./list -c server.c
+
+list:
 	cd list && make
-	$(CC) $(CFLAGS) -I./list -c server.c
 
 
 clean:
@@ -28,4 +25,4 @@ clean:
 	cd list && make clean
 
 # not actually filenames
-.PHONY: all clean
+.PHONY: all clean list

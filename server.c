@@ -21,7 +21,8 @@
 
 #define PORT "30001"
 #define BACKLOG 10
-#define MAXDATASIZE 500
+#define MAXMESSAGELENGTH 257		/* Messages are 256 bytes, plus nul byte. */
+
 
 typedef struct client
 {
@@ -29,6 +30,10 @@ typedef struct client
 	char hostname[INET6_ADDRSTRLEN];
 	char port[6];
 } CLIENT;
+
+
+DH *dh;
+
 
 /* Get sockaddr, IPv4 or IPv6. */
 void *get_in_addr(struct sockaddr *sa)
@@ -40,6 +45,7 @@ void *get_in_addr(struct sockaddr *sa)
 	return &(((struct sockaddr_in6*)sa)->sin6_addr);
 }
 
+/* Comparison function for ListSearch(). */
 int CompareClients(void* a, void* b)
 {
 	return ((CLIENT *)a)->fd == *(int *)b;
@@ -60,6 +66,50 @@ void *ec_malloc(unsigned int size)
 	return ptr;
 }
 
+/* If new_fd is nonzero, it's the file descriptor of the client that has not received the DH prime yet. */
+void UpdateConnections(LIST* clientList, int fdmax, fd_set master, int listener, int new_fd)
+{
+	CLIENT* client;
+	char msg[400];	/* Space for DH prime as well as connection information. */
+	int j;
+
+	client = ListFirst(clientList);
+
+	for (j = 0; j <= fdmax; j++)
+	{
+		if (FD_ISSET(j, &master) && j != listener)
+		{
+            /* [Port to listen on]:[host to send to]:[port to send to] */
+			if ((new_fd != 0) && (j == new_fd))
+			{
+                /* Newest client didn't recieve prime yet. */
+				strcpy(msg, BN_bn2hex(dh->p));
+				strcat(msg, ":1:");
+			}
+			else
+			{
+				strcpy(msg, "1:");
+			}
+
+			strcat(msg, client->port);
+			strcat(msg, ":");
+
+			client = ListNext(clientList);
+			if(client == NULL)
+				client = ListFirst(clientList);
+
+			strcat(msg, client->hostname);
+			strcat(msg, ":");
+			strcat(msg, client->port);
+
+			if (send(j, msg, strlen(msg), 0) == -1)
+			{
+				perror("send");
+			}
+		}
+	}
+}
+
 int main(int argc, char const *argv[])
 {
 	fd_set master;
@@ -72,9 +122,9 @@ int main(int argc, char const *argv[])
 	socklen_t sin_size;
 
 	char client_port[6];
-	char buf[MAXDATASIZE];
-	char msg[MAXDATASIZE];
-	char xor[MAXDATASIZE];
+	char buf[MAXMESSAGELENGTH];
+	char msg[MAXMESSAGELENGTH + 4];	/* 4 Bytes of header before message. */
+	char xor[MAXMESSAGELENGTH];
 	char *message;
 	int numbytes;
 
@@ -82,14 +132,15 @@ int main(int argc, char const *argv[])
 	LIST *msgList, *clientList;
 	int msgCount = 0;
 	int numClients = 0;
+	int newClients = 0;
 
 	char remoteIP[INET6_ADDRSTRLEN];
 	int yes=1;
 	int i, j, rv;
 
-	DH *dh;
 	int prime_len = 1024;	/* Default value. */
 	int generator = 2;
+
 
 	if (argc > 1)
 		prime_len = atoi(argv[1]);
@@ -158,9 +209,12 @@ int main(int argc, char const *argv[])
 	FD_SET(listener, &master);
     fdmax = listener;	/* Only file descriptor so far. */
 
+
+
 	while(1)
 	{
 		read_fds = master;
+
 		if (select(fdmax + 1, &read_fds, NULL, NULL, NULL) == -1)
 		{
 			perror("select");
@@ -205,15 +259,16 @@ int main(int argc, char const *argv[])
 						client->fd = new_fd;
 
 						ListAppend(clientList, client);                    
-						numClients++;
-
+						
 						printf("[DEBUG] numClients:%d, fd:%d, hostname:%s\n", 
 							numClients, client->fd, client->hostname);
 
-						if (numClients < 3)
+						if (numClients < 2)
 						{
                     		/* Not enough clients.
                     		   Send them DH prime and tell them to wait. */
+							numClients++;
+
 							strcpy(msg, BN_bn2hex(dh->p));
 							strcat(msg, ":0:");
 							if (send(new_fd, msg, strlen(msg), 0) == -1)
@@ -221,45 +276,26 @@ int main(int argc, char const *argv[])
 								perror("send");
 							}
 						}
+						else if (numClients == 2)
+						{
+                    		/* Third client just arrived.
+                    		   Tell everyone to update connections. */
+							numClients++;
+
+                    		UpdateConnections(clientList, fdmax, master, listener, new_fd);								
+						}
 						else
 						{
-                    		/* There are at least three clients.
-                    		   Tell everyone to update connections. */
+							/* Chat has started and another client joined.
+							   New client will be added in the next round. */
+							
+							newClients++;	
 
-							client = ListFirst(clientList);
-
-							for (j = 0; j <= fdmax; j++)
+							strcpy(msg, BN_bn2hex(dh->p));
+							strcat(msg, ":0:");
+							if (send(new_fd, msg, strlen(msg), 0) == -1)
 							{
-								if (FD_ISSET(j, &master) && j != listener)
-								{
-									if (j == new_fd)
-									{
-                    					/* Newest client didn't recieve prime yet. */
-										strcpy(msg, BN_bn2hex(dh->p));
-										strcat(msg, ":1:");
-									}
-									else
-									{
-										strcpy(msg, "1:");
-									}
-
-                    				/* [Port to listen on]:[host to send to]:[port to send to] */
-									strcat(msg, client->port);
-									strcat(msg, ":");
-
-									client = ListNext(clientList);
-									if(client == NULL)
-										client = ListFirst(clientList);
-
-									strcat(msg, client->hostname);
-									strcat(msg, ":");
-									strcat(msg, client->port);
-
-									if (send(j, msg, strlen(msg), 0) == -1)
-									{
-										perror("send");
-									}
-								}
+								perror("send");
 							}
 						}
 						printf("server: new connection from %s on socket %d\n",
@@ -270,7 +306,7 @@ int main(int argc, char const *argv[])
 				else
 				{
     				/* Receive data from client. */
-					if ((numbytes = recv(i, buf, sizeof buf, 0)) <= 0)
+					if ((numbytes = recv(i, buf, (sizeof buf), 0)) <= 0)
 					{
 						if (numbytes == 0)
 						{
@@ -295,32 +331,8 @@ int main(int argc, char const *argv[])
 						{
 							free(ListRemove(clientList));
 						}
-
-    					/* Update client connections. */
-						client = ListFirst(clientList);
-
-						for (j = 0; j <= fdmax; j++)
-						{
-							if (FD_ISSET(j, &master) && j != listener)
-							{
-                    			/* [Port to listen on]:[host to send to]:[port to send to] */
-								strcpy(msg, "1:");
-								strcat(msg, client->port);
-								strcat(msg, ":");
-
-								client = ListNext(clientList);
-								if(client == NULL)
-									client = ListFirst(clientList);
-
-								strcat(msg, client->hostname);
-								strcat(msg, client->port);
-
-								if (send(j, msg, strlen(msg), 0) == -1)
-								{
-									perror("send");
-								}
-							}
-						}
+                    	
+                    	UpdateConnections(clientList, fdmax, master, listener, 0);													
 					}
 					else
 					{
@@ -329,15 +341,12 @@ int main(int argc, char const *argv[])
 						msgCount++;
 						buf[numbytes] = '\0';
 
-						message = (char *)ec_malloc(MAXDATASIZE);
+						message = (char *)ec_malloc(MAXMESSAGELENGTH);
 						strcpy(message, buf);
 						if(ListAdd(msgList, message) == -1)
 							perror("ListAdd");
-						
-						printf("[DEBUG] Message received (%d/%d):\n", msgCount, numClients);
-						printf("	%s\n", message);
 
-						if (msgCount >= numClients)
+						if (msgCount >= numClients)	/* Received a message from each client. */
 						{
 							/* XOR messages */
 							strcpy(xor, ListFirst(msgList));
@@ -347,27 +356,72 @@ int main(int argc, char const *argv[])
 							{
 								message = (char *)msgList->cur->item;
 									//TODO: write ListCur() function.
-								for(j = 0; j <= MAXDATASIZE; j++)
+								for(j = 0; j < MAXMESSAGELENGTH; j++)
 								{
 									xor[j] ^= message[j];
 								}
 								free(ListRemove(msgList));
 							}
-							strcpy(msg, "2:");
-							strcat(msg, xor);
 
-							/* Send xor'd message to all clients. */
-							for (j = 0; j <= fdmax; j++)
+							if (newClients == 0)
 							{
-								if (FD_ISSET(j, &master) && j != listener)
+								if (strcmp(xor, "") == 0)
 								{
-									if (send(j, msg, strlen(msg), 0) == -1)
-                                    {
-                                        perror("send");
-                                    }
+									/* No one sent a message. */
+									strcpy(msg, "2:0:");
 								}
+								else
+								{
+									/* Prepare to send xor'd message. */
+									strcpy(msg, "2:1:");
+									strcat(msg, xor);
+								}
+
+								/* Send message to all clients. */
+								for (j = 0; j <= fdmax; j++)
+								{
+									if (FD_ISSET(j, &master) && j != listener)
+									{
+										if (send(j, msg, strlen(msg), 0) == -1)
+	                                    {
+	                                        perror("send");
+	                                    }
+									}
+								}
+								msgCount = 0;
 							}
-							msgCount = 0;
+							else	/* New client(s) waiting to join.  
+									   Send message then update connections to include them. */
+							{
+								if (strcmp(xor, "") == 0)
+								{
+									/* No one sent a message. */
+									strcpy(msg, "3:0:");
+								}
+								else
+								{
+									/* Prepare to send xor'd message. */
+									strcpy(msg, "3:1:");
+									strcat(msg, xor);
+								}
+
+								/* Send message to all clients. */
+								for (j = 0; j <= fdmax; j++)
+								{
+									if (FD_ISSET(j, &master) && j != listener)
+									{
+										if (send(j, msg, strlen(msg), 0) == -1)
+	                                    {
+	                                        perror("send");
+	                                    }
+									}
+								}
+								numClients += newClients;
+								newClients = 0;
+								msgCount = 0;
+
+								UpdateConnections(clientList, fdmax, master, listener, 0);
+							}
 						}
 					}
 				}
