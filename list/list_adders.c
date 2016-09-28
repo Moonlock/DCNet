@@ -52,6 +52,10 @@ LIST *ListCreate()
 	}
 	
 	newList = listArray[listPosition];
+	newList->head = NULL;
+	newList->tail = NULL;
+	newList->cur = NULL;
+	newList->size = 0;
 	listPosition++;
 	
 	return newList;
@@ -79,7 +83,7 @@ int ListAdd(LIST* list, void* item)
 	newNode->item = item;
 	nodePosition++;
 	
-	if (list->head == NULL && list->tail == NULL)	/* List is empty. */
+	if (list->size == 0)
 	{
 		list->head = newNode;
 		list->tail = newNode;
@@ -134,7 +138,7 @@ int ListInsert(LIST* list, void* item)
 	newNode->item = item;
 	nodePosition++;
 
-	if (list->head == NULL && list->tail == NULL)	/* List is empty. */
+	if (list->size == 0)
 	{
 		list->head = newNode;
 		list->tail = newNode;
@@ -187,7 +191,7 @@ int ListAppend(LIST* list, void* item)
 	newNode->item = item;
 	nodePosition++;
 
-	if (list->head == NULL && list->tail == NULL)	/* List is empty. */
+	if (list->size == 0)
 	{
 		list->head = newNode;
 		list->tail = newNode;
@@ -230,7 +234,7 @@ int ListPrepend(LIST* list, void* item)
 	newNode->item = item;
 	nodePosition++;
 
-	if (list->head == NULL && list->tail == NULL)	/* List is empty. */
+	if (list->size == 0)
 	{
 		list->head = newNode;
 		list->tail = newNode;
